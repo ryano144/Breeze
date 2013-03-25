@@ -12,7 +12,7 @@
 }(function(breeze) {
     
     var core = breeze.core;
-    var httpImpl;
+    var http;
     
     var ctor = function () { this.name = "webApi"; };
     ctor.prototype.checkForRecomposition = checkForRecomposition;   
@@ -32,8 +32,8 @@
     };
 
     function initialize() {
-        httpImpl = breeze.config.getAdapterInstance("http");
-        if (!httpImpl) {
+        http = breeze.config.getAdapterInstance("http");
+        if (!http) {
             throw new Error("Unable to initialize http adapter for WebApi.");
         }
     }
@@ -66,7 +66,7 @@
         var url = getMetadataUrl(serviceName);      
         var msgPrefix = "Metadata query failed for: " + url;
 
-        httpImpl.send({ url: url, operation: 'metadata'}).then(succeeded, failed);
+        http.send({ url: url, operation: 'metadata'}).then(succeeded, failed);
         
         function succeeded(adapterResponse) {
             
@@ -120,7 +120,7 @@
         var url = entityManager.serviceName + odataQuery;
         var msgPrefix = "Query failed";
 
-        httpImpl.send({ url: url, operation: 'query'}).then(succeeded, failed);
+        http.send({ url: url, operation: 'query'}).then(succeeded, failed);
 
         function succeeded(adapterResponse) {
             try {
@@ -148,7 +148,7 @@
         var url = entityManager.serviceName + (saveResourceName || "SaveChanges");
         var msgPrefix = "Save failed";
 
-        httpImpl.send({ url: url, operation: 'savechanges' }).then(succeeded, failed);
+        http.send({ url: url, operation: 'savechanges' }).then(succeeded, failed);
 
         function succeeded(adapterResponse) {
             var data = adapterResponse.data;
