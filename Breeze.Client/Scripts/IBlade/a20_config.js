@@ -31,7 +31,8 @@ var __config = function () {
     };
 
     __config.interfaceRegistry = {
-        ajax: new InterfaceDef("ajax"),
+        ajax: new InterfaceDef("ajax"),// deprecate
+        http: new InterfaceDef("http"),
         modelLibrary: new InterfaceDef("modelLibrary"),
         dataService: new InterfaceDef("dataService")
     };
@@ -86,7 +87,7 @@ var __config = function () {
     Method use to register implementations of standard breeze interfaces.  Calls to this method are usually
     made as the last step within an adapter implementation. 
     @method registerAdapter
-    @param interfaceName {String} - one of the following interface names "ajax", "dataService" or "modelLibrary"
+    @param interfaceName {String} - one of the following interface names "ajax", "http", "dataService" or "modelLibrary"
     @param adapterCtor {Function} - an ctor function that returns an instance of the specified interface.  
     **/
     __config.registerAdapter = function(interfaceName, adapterCtor) {
@@ -106,7 +107,7 @@ var __config = function () {
     /**
     Returns the ctor function used to implement a specific interface with a specific adapter name.
     @method getAdapter
-    @param interfaceName {String} One of the following interface names "ajax", "dataService" or "modelLibrary"
+    @param interfaceName {String} One of the following interface names "ajax", "http", "dataService" or "modelLibrary"
     @param [adapterName] {String} The name of any previously registered adapter. If this parameter is omitted then
     this method returns the "default" adapter for this interface. If there is no default adapter, then a null is returned.
     @return {Function|null} Returns either a ctor function or null.
@@ -125,7 +126,8 @@ var __config = function () {
     Initializes a collection of adapter implementations and makes each one the default for its corresponding interface.
     @method initializeAdapterInstances
     @param config {Object}
-    @param [config.ajax] {String} - the name of a previously registered "ajax" adapter
+    @param [config.ajax] {String} - the name of a previously registered "ajax" adapter (deprecated)
+    @param [config.http] {String} - the name of a previously registered "http" adapter
     @param [config.dataService] {String} - the name of a previously registered "dataService" adapter
     @param [config.modelLibrary] {String} - the name of a previously registered "modelLibrary" adapter
     @return [array of instances]
@@ -134,7 +136,8 @@ var __config = function () {
         assertConfig(config)
             .whereParam("dataService").isOptional()
             .whereParam("modelLibrary").isOptional()
-            .whereParam("ajax").isOptional();
+            .whereParam("ajax").isOptional() // deprecate
+            .whereParam("http").isOptional();
         return __objectMapToArray(config, __config.initializeAdapterInstance);
 
     };
