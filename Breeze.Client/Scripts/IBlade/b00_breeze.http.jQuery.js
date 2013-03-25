@@ -39,7 +39,7 @@
  
     // self modifying function
     function jqAjax(settings) {
-        var jQuery = core.requireLib("jQuery", "needed for 'ajax_jQuery' pluggin");
+        var jQuery = core.requireLib("jQuery", "needed for http adapter pluggin");
         jqAjax = jQuery.ajax; 
         return jqAjax(settings);
     }
@@ -84,9 +84,12 @@
 
     function getSettingsForOperation(options, defaultSettings) {
 
-        var settings = core.extend({}, options.adapterSettings); // clone settings
+        // blend defaultSettings with defaults
+        // requires version of core.extend that accepts multiple sources
+        var settings = core.extend({}, defaultSettings, options.adapterSettings);
 
-        settings.uri = options.uri;
+        // overide with specific options and operation instructions
+        settings.uri = options.uri || settings.uri;
 
         if (/savechanges/i.test(options.operation)) {
             settings.type = 'POST';
@@ -95,18 +98,18 @@
             settings.data = options.data || settings.data || {};
         } else {
             settings.type = 'GET';
-            settings.dataType = (settings.dataType || defaultSettings.dataType || 'json').toLowerCase();
+            settings.dataType = settings.dataType || 'json';
         }
 
-        // blend defaultSettings with defaults
-        if (!core.isEmpty(defaultSettings)) {
-            var compositeSettings = core.extend({}, this.defaultSettings); // clone defaults
-            core.extend(compositeSettings, settings); // override defaults with adapterSettings
-            return compositeSettings;
-        }
         return settings;
     }
-        
+   /**
+   * Returns an http adapter response object.
+   *
+   * @param {(string|Object)} data If a success response, the response data; if error, the error response.
+   * @param {(string)} textStatus Short general statement of this response (e.g, 'success' or 'error').
+   * @param {(Object)} xhr An instance of XMLHttpRequest ... or its surrogate ... used in the call.
+   */
     function makeAdapterResponse(data, textStatus, xhr) {
         xhr = xhr || {status: 0, statusText: ""};
         cleanup(xhr);
