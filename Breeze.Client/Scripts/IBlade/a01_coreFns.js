@@ -12,7 +12,7 @@ function __objectForEach(obj, kvFn) {
         }
     }
 }
-    
+ 
 function __objectFirst(obj, kvPredicate) {
     for (var key in obj) {
         if (__hasOwnProperty.call(obj, key)) {
@@ -65,14 +65,39 @@ function __getOwnPropertyValues(source) {
     return result;
 }
 
-function __extend(target, source) {
-    if (!source) return target;
-    for (var name in source) {
-        if (__hasOwnProperty.call(source, name)) {
-            target[name] = source[name];
+// Shallow, own property copy (a bit like jQuery.extend)
+// can extend with multiple sources
+// __extend(target, source1, source2, ...)
+// only copy own properties with defined values
+function __extend() {
+    var options, name, copy,
+    target = arguments[0] || {},
+    i = 1,
+    length = arguments.length;
+    for (; i < length; i++) {
+        if ((options = arguments[i]) != null) {
+            for (name in options) {
+                if (__hasOwnProperty.call(options, name)) {
+                    copy = options[name];
+                    if (copy !== undefined) {
+                        target[name] = copy;
+                    }
+                }
+            }
         }
     }
     return target;
+
+    // original
+    //function __extend(target, source) {
+    //  if (!source) return target;
+    //  for (var name in source) {
+    //      if (__hasOwnProperty.call(source, name)) {
+    //          target[name] = source[name];
+    //      }
+    //  }
+    //  return target;
+    //}
 }
 
 // template keys are the keys to return
