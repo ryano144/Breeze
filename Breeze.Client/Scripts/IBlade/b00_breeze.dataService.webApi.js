@@ -15,23 +15,23 @@
     var httpImpl;
     
     var ctor = function () { this.name = "webApi"; };
-    ctor.prototype.checkForRecomposition = checkForHttpRecomposition;   
-    ctor.prototype.initialize = initializeHttp;
+    ctor.prototype.checkForRecomposition = checkForRecomposition;   
+    ctor.prototype.initialize = initialize;
     ctor.prototype.jsonResultsAdapter = createJsonResultsAdapter();
-    ctor.prototype.fetchMetadata = httpFetchMetadata;
-    ctor.prototype.executeQuery = httpExecuteQuery;
-    ctor.prototype.saveChanges = httpSaveChanges;
+    ctor.prototype.fetchMetadata = fetchMetadata;
+    ctor.prototype.executeQuery = executeQuery;
+    ctor.prototype.saveChanges = saveChanges;
 
     breeze.config.registerAdapter("dataService", ctor);
 
     //#region private members
-    function checkForHttpRecomposition(interfaceInitializedArgs) {
+    function checkForRecomposition(interfaceInitializedArgs) {
         if (interfaceInitializedArgs.interfaceName === "http" && interfaceInitializedArgs.isDefault) {
             this.initialize();
         }
     };
 
-    function initializeHttp() {
+    function initialize() {
         httpImpl = breeze.config.getAdapterInstance("http");
         if (!httpImpl) {
             throw new Error("Unable to initialize http adapter for WebApi.");
@@ -61,7 +61,7 @@
         });
     };
 
-    function httpFetchMetadata(metadataStore, dataService) {
+    function fetchMetadata(metadataStore, dataService) {
         var serviceName = dataService.serviceName;
         var url = getMetadataUrl(serviceName);      
         var msgPrefix = "Metadata query failed for: " + url;
@@ -116,7 +116,7 @@
         return metadataSvcUrl;
     }
 
-    function httpExecuteQuery(entityManager, odataQuery) {
+    function executeQuery(entityManager, odataQuery) {
         var url = entityManager.serviceName + odataQuery;
         var msgPrefix = "Query failed";
 
@@ -144,7 +144,7 @@
         }
     }
 
-    function httpSaveChanges(entityManager, saveResourceName, saveBundleStringified) {
+    function saveChanges(entityManager, saveResourceName, saveBundleStringified) {
         var url = entityManager.serviceName + (saveResourceName || "SaveChanges");
         var msgPrefix = "Save failed";
 
