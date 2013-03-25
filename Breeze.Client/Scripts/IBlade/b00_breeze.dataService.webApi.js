@@ -125,7 +125,6 @@
         function succeeded(adapterResponse) {
             try {
                 var inlineCount = adapterResponse.headers("X-InlineCount");
-
                 if (inlineCount) {
                     inlineCount = parseInt(inlineCount, 10);
                 }

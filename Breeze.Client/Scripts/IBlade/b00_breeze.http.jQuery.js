@@ -33,7 +33,7 @@
         return jqSend(settings);
     }
     
-    //#region jQuery helper 
+    //#region jQuery helpers 
     // This stuff is probably reusable for almost any adapter that uses jQuery.ajax
     // Todo: move to helper file(s) as appropriate
  
@@ -43,37 +43,11 @@
         jqAjax = jQuery.ajax; 
         return jqAjax(settings);
     }
-    
-    function getSettingsForOperation(options, defaultSettings) {
-        
-        var settings = core.extend({}, options.adapterSettings); // clone settings
-
-        settings.uri = options.uri;
-        
-        if (/savechanges/i.test(options.operation)) {
-            settings.type = 'POST';
-            settings.dataType = 'json';
-            settings.contentType = 'application/json';
-            settings.data = options.data || settings.data || {};
-        } else {
-            settings.type = 'GET';
-            settings.dataType = (settings.dataType || defaultSettings.dataType || 'json').toLowerCase();
-        }
-        
-        // blend defaultSettings with defaults
-        if (!core.isEmpty(defaultSettings)) {
-            var compositeSettings = core.extend({}, this.defaultSettings); // clone defaults
-            core.extend(compositeSettings, settings); // override defaults with adapterSettings
-            return compositeSettings;
-        } 
-        return settings;
-    }
-    
-
+       
     function jqSend(settings) {
         var jqXHR = jqAjax(settings);
         
-        var promise = Q.when(jqXHR).then(succeeded).fail(failed);
+        var promise = Q.when(jqXHR).then(succeeded, failed);
         
         // Todo: test this in various browsers
         if (jqXHR.abort) {
@@ -87,6 +61,7 @@
         return promise;
 
         function succeeded(data, textStatus, xhr) {
+            promise.abort = null;
             return makeAdapterResponse(data, textStatus || 'success', xhr);
         }
 
@@ -96,32 +71,68 @@
         // See http://stackoverflow.com/questions/10215512/jsonp-error-in-jquery-1-7
         // Plenty of debate about whether it does or doesn't work
         function failed(xhr, textStatus, errorThrown) {
+            promise.abort = null;
             return makeAdapterResponse(xhr.responseText, textStatus || 'error', xhr);
         }
-        
-        function makeAdapterResponse(data, textStatus, xhr) {
-            cleanup(xhr);
-            var adapterResponse = {
-                data: data,
-                status: textStatus,
-                statusCode: xhr.status,
-                statusCodeText: xhr.statusText,
-                headers: headersGetterFromXhr(xhr),
-                adapterExports: { xhr: jqXHR }
-            };
-            return adapterResponse;
+    }
+
+    //#endregion
+
+    //#region xhr helpers
+    // This stuff is probably reusable for almost any adapter that uses xhr, jQuery or otherwise
+    // Todo: move to helper file(s) as appropriate
+
+    function getSettingsForOperation(options, defaultSettings) {
+
+        var settings = core.extend({}, options.adapterSettings); // clone settings
+
+        settings.uri = options.uri;
+
+        if (/savechanges/i.test(options.operation)) {
+            settings.type = 'POST';
+            settings.dataType = 'json';
+            settings.contentType = 'application/json';
+            settings.data = options.data || settings.data || {};
+        } else {
+            settings.type = 'GET';
+            settings.dataType = (settings.dataType || defaultSettings.dataType || 'json').toLowerCase();
         }
-        
-        // can no longer abort or listen to xhr state changes       
-        function cleanup(xhr) {
-            promise.abort = null;
-            xhr.abort = null;
-            xhr.onreadystatechange = null;
+
+        // blend defaultSettings with defaults
+        if (!core.isEmpty(defaultSettings)) {
+            var compositeSettings = core.extend({}, this.defaultSettings); // clone defaults
+            core.extend(compositeSettings, settings); // override defaults with adapterSettings
+            return compositeSettings;
         }
+        return settings;
+    }
+        
+    function makeAdapterResponse(data, textStatus, xhr) {
+        xhr = xhr || {status: 0, statusText: ""};
+        cleanup(xhr);
+        var adapterResponse = {
+            data: data,
+            status: textStatus,
+            statusCode: xhr.status,
+            statusCodeText: xhr.statusText,
+            headers: headersGetterFromXhr(xhr),
+            adapterExports: { xhr: xhr }
+        };
+        return adapterResponse;
+    }
+        
+    // can no longer abort or listen to xhr state changes       
+    function cleanup(xhr) {
+        xhr.abort = null;
+        xhr.onreadystatechange = null;
     }
     
     function headersGetterFromXhr(xhr) {
-        headersGetter(xhr.getAllResponseHeaders());
+        try {
+            headersGetter(xhr.getAllResponseHeaders());
+        } catch(e) {          
+            headersGetters(""); // ignore error and return no headers
+        }
     }
     
     /**
