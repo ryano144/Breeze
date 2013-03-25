@@ -1704,61 +1704,121 @@ var EntityManager = (function () {
                     refMap: {}, 
                     deferredFns: []
             };
-            var deferred = Q.defer();
             var validateOnQuery = em.validationOptions.validateOnQuery;
-            var promise = deferred.promise;
                 
-            dataService.adapterInstance.executeQuery(em, odataQuery, function (data) {
-                var result = __wrapExecution(function () {
-                    var state = { isLoading: em.isLoading };
-                    em.isLoading = true;
-                    em._pendingPubs = [];
-                    return state;
-                }, function (state) {
-                    // cleanup
-                    em.isLoading = state.isLoading;
-                    em._pendingPubs.forEach(function(fn) { fn(); });
-                    em._pendingPubs = null;
-                    // HACK for GC
-                    query = null;
-                    queryContext = null;
-                    // HACK: some errors thrown in next function do not propogate properly - this catches them.
-                    if (state.error) deferred.reject(state.error);
-
-                }, function () {
-                    var nodes = jsonResultsAdapter.extractResults(data);
-                    if (!Array.isArray(nodes)) {
-                        nodes = [nodes];
-                    }
-                    var results = nodes.map(function (node) {
-                        var r = visitAndMerge(node, queryContext, { nodeType: "root" });
-                        // anon types and simple types will not have an entityAspect.
-                        if (validateOnQuery && r.entityAspect) {
-                            r.entityAspect.validateEntity();
-                        }
-                        return r;
-                    });
-                    if (queryContext.deferredFns.length > 0) {
-                        queryContext.deferredFns.forEach(function(fn) {
-                            fn();
-                        });
-                    }
-                    return { results: results, query: query, XHR: data.XHR, inlineCount: data.inlineCount };
-                });
-                deferred.resolve( result);
-            }, function (e) {
-                if (e) {
-                    e.query = query;
-                }
-                deferred.reject(e);
-            });
-            return promise;
+            return dataService.adapterInstance.executeQuery(em, odataQuery)
+                    .then(success).fail(failed);
         } catch (e) {
+            return failed(e);
+        }
+
+        function success(data) {
+            var promise = __wrapExecution(
+            function () {          // initialize
+                var state = { isLoading: em.isLoading };
+                em.isLoading = true;
+                em._pendingPubs = [];
+                return state;
+            }, function (state) {  // finally
+                // cleanup
+                em.isLoading = state.isLoading;
+                em._pendingPubs.forEach(function (fn) { fn(); });
+                em._pendingPubs = null;
+                // HACK for GC
+                query = null;
+                queryContext = null;
+                // HACK: some errors thrown in core function do not propagate properly.
+                // Catch and return as a failed promise.
+                if (state.error) {
+                    return failed(state.error);
+                };
+
+            }, function () {      // core
+                var nodes = jsonResultsAdapter.extractResults(data);
+                if (!Array.isArray(nodes)) {
+                    nodes = [nodes];
+                }
+                var results = nodes.map(mapNode);
+
+                if (queryContext.deferredFns.length > 0) { // Why? forEach tests this anyway
+                    queryContext.deferredFns.forEach(function (fn) { fn(); });
+                }
+                var result = {
+                    results: results,
+                    inlineCount: data.inlineCount,
+                    query: query,
+                    adapterExports: data.adapterExports
+                };
+                return Q.resolve(result);
+
+                function mapNode(node) {
+                    var r = visitAndMerge(node, queryContext, { nodeType: "root" });
+                    // anon types and simple types will not have an entityAspect.
+                    if (validateOnQuery && r.entityAspect) {
+                        r.entityAspect.validateEntity();
+                    }
+                    return r;
+                }
+            });
+            return promise; // either good or bad
+        }
+
+        function failed(e) {
             if (e) {
                 e.query = query;
             }
             return Q.reject(e);
         }
+
+        //#region Original code, deprecate, remove
+        function oldExecuteQuerySuccess(data) {
+            var result = __wrapExecution(function () {
+                var state = { isLoading: em.isLoading };
+                em.isLoading = true;
+                em._pendingPubs = [];
+                return state;
+            }, function (state) {
+                // cleanup
+                em.isLoading = state.isLoading;
+                em._pendingPubs.forEach(function(fn) { fn(); });
+                em._pendingPubs = null;
+                // HACK for GC
+                query = null;
+                queryContext = null;
+                // HACK: some errors thrown in next function do not propogate properly - this catches them.
+                if (state.error) deferred.reject(state.error);
+
+            }, function () {
+                var nodes = jsonResultsAdapter.extractResults(data);
+                if (!Array.isArray(nodes)) {
+                    nodes = [nodes];
+                }
+                var results = nodes.map(function (node) {
+                    var r = visitAndMerge(node, queryContext, { nodeType: "root" });
+                    // anon types and simple types will not have an entityAspect.
+                    if (validateOnQuery && r.entityAspect) {
+                        r.entityAspect.validateEntity();
+                    }
+                    return r;
+                });
+                if (queryContext.deferredFns.length > 0) {
+                    queryContext.deferredFns.forEach(function(fn) {
+                        fn();
+                    });
+                }
+                return { results: results, query: query, XHR: data.XHR, inlineCount: data.inlineCount };
+            });
+            deferred.resolve( result);
+        }
+
+        function oldExecuteQueryFail(e) {
+            if (e) {
+                e.query = query;
+            }
+            deferred.reject(e);
+        }
+        //#endregion
+
     }
                
     function visitAndMerge(node, queryContext, nodeContext) {
