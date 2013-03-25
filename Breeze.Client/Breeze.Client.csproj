@@ -62,6 +62,7 @@
     <Content Include="Scripts\IBlade\b00_breeze.modelLibrary.backingStore.js" />
     <Content Include="Scripts\IBlade\b00_breeze.modelLibrary.ko.js" />
     <Content Include="Scripts\IBlade\a55_emOptions.js" />
+    <Content Include="Scripts\IBlade\b00_breeze.http.jQuery.js" />
     <Content Include="Scripts\IBlade\iface.keyGeneratorInterface.js" />
     <Content Include="Scripts\IBlade\iface.promise.js" />
     <Content Include="Scripts\IBlade\node_modules\uglify-js\lib\ast.js" />
