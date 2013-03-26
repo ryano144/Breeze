@@ -640,27 +640,33 @@ var EntityManager = (function () {
         @param callback.data {Object} 
         @param callback.data.results {Array of Entity}
         @param callback.data.query {EntityQuery} The original query
-        @param callback.data.XHR {XMLHttpRequest} The raw XMLHttpRequest returned from the server.
+        @param callback.data.entityManager {EntityManager} The manager used to make the query
         @param callback.data.inlineCount {Integer} Only available if 'inlineCount(true)' was applied to the query.  Returns the count of 
         items that would have been returned by the query before applying any skip or take operators, but after any filter/where predicates
-        would have been applied. 
+        would have been applied.
+        @param callback.data.adapterExports {Object} Whatever the http adapter decides to return such as
+        the XMLHttpRequest object used to make the call. The presence of adapterExports indicates that a server request was made.
 
     @param [errorCallback] {Function} Function called on failure.
             
         failureFunction([error])
         @param [errorCallback.error] {Error} Any error that occured wrapped into an Error object.
-        @param [errorCallback.error.query] The query that caused the error.
-        @param [errorCallback.error.XHR] {XMLHttpRequest} The raw XMLHttpRequest returned from the server.
+        @param [errorCallback.error.query] {EntityQuery} The query that caused the error.
+        @param [errorCallback.error.entityManager] {EntityManager} The manager used to make the query.
+        @param [errorCallback.error.adapterExports] {Object} Whatever the http adapter decides to return such as
+        the XMLHttpRequest object used to make the call. The presence of adapterExports indicates that a server request was attempted.
             
 
     @return {Promise} Promise
 
         promiseData.results {Array of Entity}
         promiseData.query {EntityQuery} The original query
-        promiseData.XHR {XMLHttpRequest} The raw XMLHttpRequest returned from the server.
+        promiseData.data.entityManager {EntityManager} The manager  used to make the query
         promiseData.inlineCount {Integer} Only available if 'inlineCount(true)' was applied to the query.  Returns the count of 
         items that would have been returned by the query before applying any skip or take operators, but after any filter/where predicates
         would have been applied. 
+        promiseData.adapterExports {Object} Whatever the http adapter decides to return such as
+        the XMLHttpRequest object used to make the call. The presence of adapterExports indicates that a server request was made.
     **/
     proto.executeQuery = function (query, callback, errorCallback) {
         // TODO: think about creating an executeOdataQuery or executeRawOdataQuery as a seperate method.
@@ -670,18 +676,171 @@ var EntityManager = (function () {
         assertParam(callback, "callback").isFunction().isOptional().check();
         assertParam(errorCallback, "errorCallback").isFunction().isOptional().check();
         var promise;
+        var em = this;
         if ( (!this.dataService.hasServerMetadata ) || this.metadataStore.hasMetadataFor(this.dataService.serviceName)) {
-            promise = executeQueryCore(this, query);
+            promise = executeQueryCore(em, query);
         } else {
-            var that = this;
-            promise = this.fetchMetadata().then(function () {
-                return executeQueryCore(that, query);
-            }).fail(function (error) {
-                return Q.reject(error);
-            });
+            promise = em.fetchMetadata()
+                .then(function () {
+                    return executeQueryCore(em, query);
+                })
+                .fail(function (error) {
+                    return Q.reject(error);
+                });
         }
         return promiseWithCallbacks(promise, callback, errorCallback);
     };
+
+    // returns a promise
+    function executeQueryCore(em, query) {
+        try {
+            var metadataStore = em.metadataStore;
+            var dataService = query.dataService || em.dataService;
+            if (metadataStore.isEmpty() && dataService.hasServerMetadata) {
+                throw new Error("cannot execute _executeQueryCore until metadataStore is populated.");
+            }
+            var queryOptions = query.queryOptions || em.queryOptions || QueryOptions.defaultInstance;
+            if (queryOptions.fetchStrategy == FetchStrategy.FromLocalCache) {
+                return Q.fcall(function () {
+                    var results = em.executeQueryLocally(query);
+                    return {
+                        results: results,
+                        query: query,
+                        entityManager: em
+                    };
+                });
+            }
+
+            var jsonResultsAdapter = query.jsonResultsAdapter || dataService.jsonResultsAdapter;
+
+            var odataQuery = toOdataQueryString(query, metadataStore);
+            var queryContext = {
+                query: query,
+                entityManager: em,
+                dataService: dataService,
+                mergeStrategy: queryOptions.mergeStrategy,
+                jsonResultsAdapter: jsonResultsAdapter,
+                refMap: {},
+                deferredFns: []
+            };
+            var validateOnQuery = em.validationOptions.validateOnQuery;
+
+            return dataService.adapterInstance.executeQuery(em, odataQuery)
+                    .then(querySuccess).fail(queryFailed);
+        } catch (e) {
+            return queryFailed(e);
+        }
+
+        function querySuccess(data) {
+            var promise = __wrapExecution(
+            function () {          // initialize
+                var state = { isLoading: em.isLoading };
+                em.isLoading = true;
+                em._pendingPubs = [];
+                return state;
+            }, function (state) {  // finally
+                // cleanup
+                em.isLoading = state.isLoading;
+                em._pendingPubs.forEach(function (fn) { fn(); });
+                em._pendingPubs = null;
+                // HACK for GC
+                query = null;
+                queryContext = null;
+                // HACK: some errors thrown in core function do not propagate properly.
+                // Catch and return as a failed promise.
+                if (state.error) {
+                    return queryFailed(state.error);
+                };
+
+            }, function () {      // core
+                var nodes = jsonResultsAdapter.extractResults(data);
+                if (!Array.isArray(nodes)) {
+                    nodes = [nodes];
+                }
+                var results = nodes.map(mapNode);
+
+                if (queryContext.deferredFns.length > 0) { // Why? forEach tests this anyway
+                    queryContext.deferredFns.forEach(function (fn) { fn(); });
+                }
+                var result = {
+                    results: results,
+                    query: query,
+                    entityManager: em,
+                    inlineCount: data.inlineCount,
+                    adapterExports: data.adapterExports
+                };
+                return Q.resolve(result);
+
+                function mapNode(node) {
+                    var r = visitAndMerge(node, queryContext, { nodeType: "root" });
+                    // anon types and simple types will not have an entityAspect.
+                    if (validateOnQuery && r.entityAspect) {
+                        r.entityAspect.validateEntity();
+                    }
+                    return r;
+                }
+            });
+            return promise; // either good or bad
+        }
+
+        function queryFailed(e) {
+            if (e) {
+                e.query = query;
+                e.entityManager = em;
+            }
+            return Q.reject(e);
+        }
+
+        //#region Original code, deprecate, remove
+        function oldExecuteQuerySuccess(data) {
+            var result = __wrapExecution(function () {
+                var state = { isLoading: em.isLoading };
+                em.isLoading = true;
+                em._pendingPubs = [];
+                return state;
+            }, function (state) {
+                // cleanup
+                em.isLoading = state.isLoading;
+                em._pendingPubs.forEach(function (fn) { fn(); });
+                em._pendingPubs = null;
+                // HACK for GC
+                query = null;
+                queryContext = null;
+                // HACK: some errors thrown in next function do not propogate properly - this catches them.
+                if (state.error) deferred.reject(state.error);
+
+            }, function () {
+                var nodes = jsonResultsAdapter.extractResults(data);
+                if (!Array.isArray(nodes)) {
+                    nodes = [nodes];
+                }
+                var results = nodes.map(function (node) {
+                    var r = visitAndMerge(node, queryContext, { nodeType: "root" });
+                    // anon types and simple types will not have an entityAspect.
+                    if (validateOnQuery && r.entityAspect) {
+                        r.entityAspect.validateEntity();
+                    }
+                    return r;
+                });
+                if (queryContext.deferredFns.length > 0) {
+                    queryContext.deferredFns.forEach(function (fn) {
+                        fn();
+                    });
+                }
+                return { results: results, query: query, XHR: data.XHR, inlineCount: data.inlineCount };
+            });
+            deferred.resolve(result);
+        }
+
+        function oldExecuteQueryFail(e) {
+            if (e) {
+                e.query = query;
+            }
+            deferred.reject(e);
+        }
+        //#endregion
+
+    }
 
     /**
     Executes the specified query against this EntityManager's local cache.
@@ -759,7 +918,7 @@ var EntityManager = (function () {
     Often we will be saving all of the entities within an EntityManager that are either added, modified or deleted
     and we will let the 'saveChanges' call determine which entities these are. 
     @example
-        // assume em1 is an EntityManager containing a number of preexisting entities. 
+        // assume em is an EntityManager containing a number of preexisting entities. 
         // This could include added, modified and deleted entities.
         em.saveChanges().then(function(saveResult) {
             var savedEntities = saveResult.entities;
@@ -801,13 +960,17 @@ var EntityManager = (function () {
         These entities are actually references to entities in the EntityManager cache that have been updated as a result of the
         save.
         @param [callback.saveResult.keyMappings] {Object} Map of OriginalEntityKey, NewEntityKey
-        @param [callback.saveResult.XHR] {XMLHttpRequest} The raw XMLHttpRequest returned from the server.
+        @param [callback.saveResult.entityManager] {EntityManager} Manager used to save
+        @param [callback.saveResult.adapterExports] {Object} Whatever the http adapter decides to return such as
+        the XMLHttpRequest object used to make the call. The presence of adapterExports indicates that a server request was made.
 
     @param [errorCallback] {Function} Function called on failure.
             
         failureFunction([error])
         @param [errorCallback.error] {Error} Any error that occured wrapped into an Error object.
-        @param [errorCallback.error.XHR] {XMLHttpRequest} The raw XMLHttpRequest returned from the server.
+        @param [errorCallback.error.entityManager] {EntityManager} Manager used to save
+        @param [errorCallback.error.adapterExports] {Object} Whatever the http adapter decides to return such as
+        the XMLHttpRequest object used to make the call. The presence of adapterExports indicates that a server request was attempted.
     @return {Promise} Promise
     **/
     proto.saveChanges = function (entities, saveOptions, callback, errorCallback) {
@@ -820,23 +983,21 @@ var EntityManager = (function () {
         assertParam(callback, "callback").isFunction().isOptional().check();
         assertParam(errorCallback, "errorCallback").isFunction().isOptional().check();
 
-        saveOptions = saveOptions || this.saveOptions || SaveOptions.defaultInstance;
+        saveOptions = __extend({}, saveOptions || this.saveOptions || SaveOptions.defaultInstance);
 
-        //Todo: Add "saveResourceName" as legal SaveOption. 
-        //      This is the agreed way to specify alternative save endpoints.
         var saveResourceName = saveOptions.saveResourceName || 'SaveChanges';
 
-        var promise = saveChangesCore(this, saveResourceName, entities, saveOptions)
+        var promise = saveChangesImpl(this, saveResourceName, entities, saveOptions)
 
         return promiseWithCallbacks(promise, callback, errorCallback);
     }
 
-    function saveChangesCore(manager, saveResourceName, entities, saveOptions) {
+    function saveChangesImpl(em, saveResourceName, entities, saveOptions) {
         var isFullSave = entities == null;
-        var entitiesToSave = getEntitiesToSave(manager, entities);
+        var entitiesToSave = getEntitiesToSave(em, entities);
             
         if (entitiesToSave.length == 0) {
-            var saveResult =  { entities: [], keyMappings: [] };
+            var saveResult =  { entities: [], keyMappings: [], entityManager: em };
             return Q.resolve(saveResult);
         }
             
@@ -846,11 +1007,12 @@ var EntityManager = (function () {
             });                
             if (anyPendingSaves) {
                 var err = new Error("ConcurrentSaves not allowed - SaveOptions.allowConcurrentSaves is false");
+                err.entityManager.em;
                 return Q.reject(err);
             }
         }
             
-        if (manager.validationOptions.validateOnSave) {
+        if (em.validationOptions.validateOnSave) {
             var failedEntities = entitiesToSave.filter(function (entity) {
                 var aspect = entity.entityAspect;
                 var isValid = aspect.entityState.isDeleted() || aspect.validateEntity();
@@ -859,6 +1021,7 @@ var EntityManager = (function () {
             if (failedEntities.length > 0) {
                 var valError = new Error("Validation error");
                 valError.entitiesWithErrors = failedEntities;
+                valError.entityManager.em;
                 return Q.reject(valError);
             }
         }
@@ -868,18 +1031,18 @@ var EntityManager = (function () {
         // TODO: need to check that if we are doing a partial save that all entities whose temp keys 
         // are referenced are also in the partial save group
 
-        var saveBundle = { entities: unwrapEntities(entitiesToSave, manager.metadataStore), saveOptions: saveOptions};
+        var saveBundle = { entities: unwrapEntities(entitiesToSave, em.metadataStore), saveOptions: saveOptions};
         var saveBundleStringified = JSON.stringify(saveBundle);
 
-        var promise = performSave(manager, saveResourceName, saveBundleStringified, entitiesToSave);
+        var promise = performSave(em, saveResourceName, saveBundleStringified, entitiesToSave);
 
         return promise;
 
     };
 
-    function performSave(manager, saveResourceName, saveBundleStringified, entitiesToSave) {
+    function performSave(em, saveResourceName, saveBundleStringified, entitiesToSave) {
 
-        return manager.dataService.adapterInstance.saveChanges(manager, saveResourceName, saveBundleStringified)
+        return em.dataService.adapterInstance.saveChanges(em, saveResourceName, saveBundleStringified)
             .then(saveSuccess).fail(saveFailed);
 
         function saveSuccess(data) {
@@ -890,14 +1053,15 @@ var EntityManager = (function () {
                 saveResourceName: saveResourceName,
                 entities: data.Entities,
                 keyMappings: data.KeyMappings,
+                entityManager: em,
                 adapterExports: data.adapterExports
             };
-            fixupKeys(manager, saveResult.keyMappings);
+            fixupKeys(em, saveResult.keyMappings);
 
             var saveContext = {
                 query: null, // tells visitAndMerge that this is a save instead of a query
-                entityManager: manager,
-                jsonResultsAdapter: manager.dataService.jsonResultsAdapter,
+                entityManager: em,
+                jsonResultsAdapter: em.dataService.jsonResultsAdapter,
                 mergeStrategy: MergeStrategy.OverwriteChanges,
                 refMap: {},
                 deferredFns: []
@@ -909,9 +1073,9 @@ var EntityManager = (function () {
 
             markIsBeingSaved(entitiesToSave, false);
 
-            manager._hasChanges = (isFullSave && haveSameContents(entitiesToSave, savedEntities)) ? false : manager._hasChangesCore();
-            if (!manager._hasChanges) {
-                manager.hasChangesChanged.publish({ entityManager: manager, hasChanges: false });
+            em._hasChanges = (isFullSave && haveSameContents(entitiesToSave, savedEntities)) ? false : em._hasChangesCore();
+            if (!em._hasChanges) {
+                em.hasChangesChanged.publish({ entityManager: em, hasChanges: false });
             }
 
             saveResult.entities = savedEntities;
@@ -920,6 +1084,7 @@ var EntityManager = (function () {
         
         function saveFailed(error) {
             markIsBeingSaved(entitiesToSave, false);
+            error.entityManager = em;
             return Q.reject(error);
         }
     }
@@ -1747,151 +1912,6 @@ var EntityManager = (function () {
                 });
             }
         });
-    }
-
-    // returns a promise
-    function executeQueryCore(em, query) {
-        try {
-            var metadataStore = em.metadataStore;
-            var dataService = query.dataService || em.dataService;
-            if (metadataStore.isEmpty() && dataService.hasServerMetadata) {
-                throw new Error("cannot execute _executeQueryCore until metadataStore is populated.");
-            }
-            var queryOptions = query.queryOptions || em.queryOptions || QueryOptions.defaultInstance;
-            if (queryOptions.fetchStrategy == FetchStrategy.FromLocalCache) {
-                return Q.fcall(function () {
-                    var results = em.executeQueryLocally(query);
-                    return { results: results, query: query };
-                });
-            }
-            
-            var jsonResultsAdapter = query.jsonResultsAdapter || dataService.jsonResultsAdapter;
-
-            var odataQuery = toOdataQueryString(query, metadataStore);
-            var queryContext = {
-                    query: query,
-                    entityManager: em,
-                    dataService: dataService,
-                    mergeStrategy: queryOptions.mergeStrategy,
-                    jsonResultsAdapter: jsonResultsAdapter,
-                    refMap: {}, 
-                    deferredFns: []
-            };
-            var validateOnQuery = em.validationOptions.validateOnQuery;
-                
-            return dataService.adapterInstance.executeQuery(em, odataQuery)
-                    .then(querySuccess).fail(queryFailed);
-        } catch (e) {
-            return queryFailed(e);
-        }
-
-        function querySuccess(data) {
-            var promise = __wrapExecution(
-            function () {          // initialize
-                var state = { isLoading: em.isLoading };
-                em.isLoading = true;
-                em._pendingPubs = [];
-                return state;
-            }, function (state) {  // finally
-                // cleanup
-                em.isLoading = state.isLoading;
-                em._pendingPubs.forEach(function (fn) { fn(); });
-                em._pendingPubs = null;
-                // HACK for GC
-                query = null;
-                queryContext = null;
-                // HACK: some errors thrown in core function do not propagate properly.
-                // Catch and return as a failed promise.
-                if (state.error) {
-                    return queryFailed(state.error);
-                };
-
-            }, function () {      // core
-                var nodes = jsonResultsAdapter.extractResults(data);
-                if (!Array.isArray(nodes)) {
-                    nodes = [nodes];
-                }
-                var results = nodes.map(mapNode);
-
-                if (queryContext.deferredFns.length > 0) { // Why? forEach tests this anyway
-                    queryContext.deferredFns.forEach(function (fn) { fn(); });
-                }
-                var result = {
-                    results: results,
-                    inlineCount: data.inlineCount,
-                    query: query,
-                    adapterExports: data.adapterExports
-                };
-                return Q.resolve(result);
-
-                function mapNode(node) {
-                    var r = visitAndMerge(node, queryContext, { nodeType: "root" });
-                    // anon types and simple types will not have an entityAspect.
-                    if (validateOnQuery && r.entityAspect) {
-                        r.entityAspect.validateEntity();
-                    }
-                    return r;
-                }
-            });
-            return promise; // either good or bad
-        }
-
-        function queryFailed(e) {
-            if (e) {
-                e.query = query;
-            }
-            return Q.reject(e);
-        }
-
-        //#region Original code, deprecate, remove
-        function oldExecuteQuerySuccess(data) {
-            var result = __wrapExecution(function () {
-                var state = { isLoading: em.isLoading };
-                em.isLoading = true;
-                em._pendingPubs = [];
-                return state;
-            }, function (state) {
-                // cleanup
-                em.isLoading = state.isLoading;
-                em._pendingPubs.forEach(function(fn) { fn(); });
-                em._pendingPubs = null;
-                // HACK for GC
-                query = null;
-                queryContext = null;
-                // HACK: some errors thrown in next function do not propogate properly - this catches them.
-                if (state.error) deferred.reject(state.error);
-
-            }, function () {
-                var nodes = jsonResultsAdapter.extractResults(data);
-                if (!Array.isArray(nodes)) {
-                    nodes = [nodes];
-                }
-                var results = nodes.map(function (node) {
-                    var r = visitAndMerge(node, queryContext, { nodeType: "root" });
-                    // anon types and simple types will not have an entityAspect.
-                    if (validateOnQuery && r.entityAspect) {
-                        r.entityAspect.validateEntity();
-                    }
-                    return r;
-                });
-                if (queryContext.deferredFns.length > 0) {
-                    queryContext.deferredFns.forEach(function(fn) {
-                        fn();
-                    });
-                }
-                return { results: results, query: query, XHR: data.XHR, inlineCount: data.inlineCount };
-            });
-            deferred.resolve( result);
-        }
-
-        function oldExecuteQueryFail(e) {
-            if (e) {
-                e.query = query;
-            }
-            deferred.reject(e);
-        }
-        //#endregion
-
     }
                
     function visitAndMerge(node, queryContext, nodeContext) {

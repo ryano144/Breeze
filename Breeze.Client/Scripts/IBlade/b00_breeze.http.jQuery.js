@@ -48,23 +48,22 @@
         var jqXHR = jqAjax(settings);
         
         var promise = Q.when(jqXHR).then(succeeded, failed);
-        
-        // Add abort() to promise if available
-        // Todo: test this in various browsers
-        if (jqXHR.abort) {
-            promise.abort = function () {
-                try {
-                    jqXHR.abort(); // should trigger fail  
-                } catch (e) { /* eat it */
-                } finally {
-                    promise.abort = null;
-                    jqXHR.abort = null;
-                }
-            };
-            promise.fin(function () { promise.abort = null; });
-        } 
+
+        // Todo: Add qRemora to add abort
+        // promise = core.qRemora(promise, { abort: abort });
         
         return promise;
+
+        // see qRemora note above
+        // Add abort() to promise
+        //function abort() {
+        //    try {
+        //        jqXHR.abort(); // should trigger fail  
+        //    } catch (e) {      // eat it
+        //    } finally {        // only call it once
+        //        jqXHR.abort = null;
+        //    }
+        //};
     }
     function succeeded(data, textStatus, xhr) {
         return makeAdapterResponse(data, textStatus || 'success', xhr);
@@ -100,7 +99,7 @@
             settings.contentType = 'application/json';
             settings.data = options.data || settings.data || {};
         } else {
-            settings.type = 'GET';
+            settings.type = settings.type || 'GET';
             settings.dataType = settings.dataType || 'json';
         }
 
