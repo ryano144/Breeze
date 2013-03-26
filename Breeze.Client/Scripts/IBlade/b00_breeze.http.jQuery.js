@@ -49,31 +49,34 @@
         
         var promise = Q.when(jqXHR).then(succeeded, failed);
         
+        // Add abort() to promise if available
         // Todo: test this in various browsers
         if (jqXHR.abort) {
             promise.abort = function () {
                 try {
                     jqXHR.abort(); // should trigger fail  
-                } catch (e) { /* eat it */}
-            }; 
+                } catch (e) { /* eat it */
+                } finally {
+                    promise.abort = null;
+                    jqXHR.abort = null;
+                }
+            };
+            promise.fin(function () { promise.abort = null; });
         } 
         
         return promise;
+    }
+    function succeeded(data, textStatus, xhr) {
+        return makeAdapterResponse(data, textStatus || 'success', xhr);
+    }
 
-        function succeeded(data, textStatus, xhr) {
-            promise.abort = null;
-            return makeAdapterResponse(data, textStatus || 'success', xhr);
-        }
-
-        // Todo: determine if and how called when aborted
-        // Todo: determine if called when JSOP request fails.
-        // may have to ensure there is a timeout or use some other gambit
-        // See http://stackoverflow.com/questions/10215512/jsonp-error-in-jquery-1-7
-        // Plenty of debate about whether it does or doesn't work
-        function failed(xhr, textStatus, errorThrown) {
-            promise.abort = null;
-            return makeAdapterResponse(xhr.responseText, textStatus || 'error', xhr);
-        }
+    // Todo: determine if and how called when aborted
+    // Todo: determine if called when JSOP request fails.
+    // may have to ensure there is a timeout or use some other gambit
+    // See http://stackoverflow.com/questions/10215512/jsonp-error-in-jquery-1-7
+    // Plenty of debate about whether it does or doesn't work
+    function failed(xhr, textStatus, errorThrown) {
+        return makeAdapterResponse(xhr.responseText, textStatus || 'error', xhr);
     }
 
     //#endregion
@@ -111,31 +114,29 @@
    * @param {(Object)} xhr An instance of XMLHttpRequest ... or its surrogate ... used in the call.
    */
     function makeAdapterResponse(data, textStatus, xhr) {
-        xhr = xhr || {status: 0, statusText: ""};
-        cleanup(xhr);
+
+        xhr = cleanupXhr(xhr);
+
         var adapterResponse = {
             data: data,
             status: textStatus,
             statusCode: xhr.status,
             statusCodeText: xhr.statusText,
-            headers: headersGetterFromXhr(xhr),
+            headers: headersGetter(xhr.getAllResponseHeaders()),
             adapterExports: { xhr: xhr }
         };
         return adapterResponse;
     }
-        
-    // can no longer abort or listen to xhr state changes       
-    function cleanup(xhr) {
+
+    function cleanupXhr(xhr) {
+        xhr = xhr || { status: 0, statusText: "" };
+        if (!xhr.getAllResponseHeaders) {
+            xhr.getAllResponseHeaders = function () { return ""; };
+        }
+        // can no longer abort or listen to xhr state changes    
         xhr.abort = null;
         xhr.onreadystatechange = null;
-    }
-    
-    function headersGetterFromXhr(xhr) {
-        try {
-            headersGetter(xhr.getAllResponseHeaders());
-        } catch(e) {          
-            headersGetters(""); // ignore error and return no headers
-        }
+        return xhr;
     }
     
     /**
@@ -163,7 +164,23 @@
 
             return headersObj;
         };
-    }   
+    }
+
+    // Todo: seems generally useful. Add to core.coreFns?
+    /**
+     * @ngdoc function
+     * @name angular.isObject
+     * @function
+     *
+     * @description
+     * Determines if a reference is an `Object`. Unlike `typeof` in JavaScript, `null`s are not
+     * considered to be objects.
+     *
+     * @param {*} value Reference to check.
+     * @returns {boolean} True if `value` is an `Object` but not `null`.
+     */
+    function isObject(value) { return value != null && typeof value == 'object'; }
+
     /**
      * https://github.com/angular/angular.js/blob/master/src/ng/http.js
      * Parse headers into key value object
