@@ -184,12 +184,14 @@ var SaveOptions = (function () {
     @method <ctor> SaveOptions
     @param config {Object}
     @param [config.allowConcurrentSaves] {Boolean}
+    @param [config.saveResourceName] {String} An alternative to 'SaveChanges' as the server-side save resource. 
     @param [config.tag] {Object} Free form value that will be sent to the server. 
     **/
     var ctor = function (config) {
         config = config || {};
         assertConfig(config)
-            .whereParam("allowConcurrentSaves").isBoolean().isOptional().withDefault(false)
+            .whereParam("allowConcurrentSaves").isBoolean().isOptional()
+            .whereParam("saveResourceName").isString().isOptional()
             .whereParam("tag").isOptional()
             .applyAll(this);
                         
