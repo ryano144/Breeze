@@ -664,6 +664,8 @@ var EntityManager = (function () {
     **/
     proto.executeQuery = function (query, callback, errorCallback) {
         // TODO: think about creating an executeOdataQuery or executeRawOdataQuery as a seperate method.
+        // TODO: shouldn't ALL exceptions, perhaps even assertParam, flow through the errorCallback/promise fail?
+        //       consider doing this in try/catch
         assertParam(query, "query").isInstanceOf(EntityQuery).or().isString().check();
         assertParam(callback, "callback").isFunction().isOptional().check();
         assertParam(errorCallback, "errorCallback").isFunction().isOptional().check();
@@ -809,18 +811,32 @@ var EntityManager = (function () {
     @return {Promise} Promise
     **/
     proto.saveChanges = function (entities, saveOptions, callback, errorCallback) {
+
+        // TODO: shouldn't ALL exceptions, perhaps even assertParam, flow through the errorCallback/promise fail?
+        //       consider doing this in try/catch
+
         assertParam(entities, "entities").isOptional().isArray().isEntity().check();
         assertParam(saveOptions, "saveOptions").isInstanceOf(SaveOptions).isOptional().check();
         assertParam(callback, "callback").isFunction().isOptional().check();
         assertParam(errorCallback, "errorCallback").isFunction().isOptional().check();
-            
+
         saveOptions = saveOptions || this.saveOptions || SaveOptions.defaultInstance;
+
+        //Todo: Add "saveResourceName" as legal SaveOption. 
+        //      This is the agreed way to specify alternative save endpoints.
+        var saveResourceName = saveOptions.saveResourceName || 'SaveChanges';
+
+        var promise = saveChangesCore(this, saveResourceName, entities, saveOptions)
+
+        return promiseWithCallbacks(promise, callback, errorCallback);
+    }
+
+    function saveChangesCore(manager, saveResourceName, entities, saveOptions) {
         var isFullSave = entities == null;
-        var entitiesToSave = getEntitiesToSave(this, entities);
+        var entitiesToSave = getEntitiesToSave(manager, entities);
             
         if (entitiesToSave.length == 0) {
             var saveResult =  { entities: [], keyMappings: [] };
-            if (callback) callback(saveResult);
             return Q.resolve(saveResult);
         }
             
@@ -830,12 +846,11 @@ var EntityManager = (function () {
             });                
             if (anyPendingSaves) {
                 var err = new Error("ConcurrentSaves not allowed - SaveOptions.allowConcurrentSaves is false");
-                if (errorCallback) errorCallback(err);
                 return Q.reject(err);
             }
         }
             
-        if (this.validationOptions.validateOnSave) {
+        if (manager.validationOptions.validateOnSave) {
             var failedEntities = entitiesToSave.filter(function (entity) {
                 var aspect = entity.entityAspect;
                 var isValid = aspect.entityState.isDeleted() || aspect.validateEntity();
@@ -844,7 +859,6 @@ var EntityManager = (function () {
             if (failedEntities.length > 0) {
                 var valError = new Error("Validation error");
                 valError.entitiesWithErrors = failedEntities;
-                if (errorCallback) errorCallback(valError);
                 return Q.reject(valError);
             }
         }
@@ -854,13 +868,71 @@ var EntityManager = (function () {
         // TODO: need to check that if we are doing a partial save that all entities whose temp keys 
         // are referenced are also in the partial save group
 
-        var saveBundle = { entities: unwrapEntities(entitiesToSave, this.metadataStore), saveOptions: saveOptions};
+        var saveBundle = { entities: unwrapEntities(entitiesToSave, manager.metadataStore), saveOptions: saveOptions};
         var saveBundleStringified = JSON.stringify(saveBundle);
 
+        var promise = performSave(manager, saveResourceName, saveBundleStringified, entitiesToSave);
+
+        return promise;
+
+    };
+
+    function performSave(manager, saveResourceName, saveBundleStringified, entitiesToSave) {
+
+        return manager.dataService.adapterInstance.saveChanges(manager, saveResourceName, saveBundleStringified)
+            .then(saveSuccess).fail(saveFailed);
+
+        function saveSuccess(data) {
+            // Todo: Jay - what is the hack here?
+            // HACK: simply to change the 'case' of properties in the saveResult
+            // but KeyMapping properties are still ucase. ugh...
+            var saveResult = {
+                saveResourceName: saveResourceName,
+                entities: data.Entities,
+                keyMappings: data.KeyMappings,
+                adapterExports: data.adapterExports
+            };
+            fixupKeys(manager, saveResult.keyMappings);
+
+            var saveContext = {
+                query: null, // tells visitAndMerge that this is a save instead of a query
+                entityManager: manager,
+                jsonResultsAdapter: manager.dataService.jsonResultsAdapter,
+                mergeStrategy: MergeStrategy.OverwriteChanges,
+                refMap: {},
+                deferredFns: []
+            };
+
+            var savedEntities = saveResult.entities.map(function (rawEntity) {
+                return visitAndMerge(rawEntity, saveContext, { nodeType: "root" });
+            });
+
+            markIsBeingSaved(entitiesToSave, false);
+
+            manager._hasChanges = (isFullSave && haveSameContents(entitiesToSave, savedEntities)) ? false : manager._hasChangesCore();
+            if (!manager._hasChanges) {
+                manager.hasChangesChanged.publish({ entityManager: manager, hasChanges: false });
+            }
+
+            saveResult.entities = savedEntities;
+            return Q.resolve(saveResult);
+        }
+        
+        function saveFailed(error) {
+            markIsBeingSaved(entitiesToSave, false);
+            return Q.reject(error);
+        }
+    }
+
+    //#region old code, deprecated, to be removed
+
+    function oldPerformSave(manager, notUsed, saveBundleStringified, entitiesToSave) {
+        var that = manager;
         var deferred = Q.defer();
-        this.dataService.adapterInstance.saveChanges(this, saveBundleStringified, deferred.resolve, deferred.reject);
-        var that = this;
-        return deferred.promise.then(function (rawSaveResult) {
+        this.dataService.adapterInstance.saveChanges(manager, saveBundleStringified, deferred.resolve, deferred.reject);
+
+        return deferred.promise.then(
+            function (rawSaveResult) {
             // HACK: simply to change the 'case' of properties in the saveResult
             // but KeyMapping properties are still ucase. ugh...
             var saveResult = { entities: rawSaveResult.Entities, keyMappings: rawSaveResult.KeyMappings, XHR: rawSaveResult.XHR };
@@ -894,7 +966,8 @@ var EntityManager = (function () {
         });
 
     };
-    
+    //#endregion
+
     function haveSameContents(arr1, arr2) {
         if (arr1.length != arr2.length) {
             return false;
@@ -1707,12 +1780,12 @@ var EntityManager = (function () {
             var validateOnQuery = em.validationOptions.validateOnQuery;
                 
             return dataService.adapterInstance.executeQuery(em, odataQuery)
-                    .then(success).fail(failed);
+                    .then(querySuccess).fail(queryFailed);
         } catch (e) {
-            return failed(e);
+            return queryFailed(e);
         }
 
-        function success(data) {
+        function querySuccess(data) {
             var promise = __wrapExecution(
             function () {          // initialize
                 var state = { isLoading: em.isLoading };
@@ -1730,7 +1803,7 @@ var EntityManager = (function () {
                 // HACK: some errors thrown in core function do not propagate properly.
                 // Catch and return as a failed promise.
                 if (state.error) {
-                    return failed(state.error);
+                    return queryFailed(state.error);
                 };
 
             }, function () {      // core
@@ -1763,7 +1836,7 @@ var EntityManager = (function () {
             return promise; // either good or bad
         }
 
-        function failed(e) {
+        function queryFailed(e) {
             if (e) {
                 e.query = query;
             }
