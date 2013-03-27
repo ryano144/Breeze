@@ -28,8 +28,8 @@
 
     ctor.prototype.send = send;
     
-    function send(options) {
-        var settings = getSettingsForOperation(options, this.defaultSettings);
+    function send(settings) {
+        settings = getSettingsForOperation(settings, this.defaultSettings);
         return jqSend(settings);
     }
     
@@ -84,25 +84,23 @@
     // This stuff is probably reusable for almost any adapter that uses xhr, jQuery or otherwise
     // Todo: move to helper file(s) as appropriate
 
-    function getSettingsForOperation(options, defaultSettings) {
+    function getSettingsForOperation(settings, defaultSettings) {
 
-        // blend defaultSettings with defaults
+        // blend defaultSettings with settings
         // requires version of core.extend that accepts multiple sources
-        var settings = core.extend({}, defaultSettings, options.adapterSettings);
+        var settings = core.extend({}, defaultSettings, settings);
 
-        // overide with specific options and operation instructions
-        settings.uri = options.uri || settings.uri;
-
-        if (/savechanges/i.test(options.operation)) {
+        // overide with operation-specific instructions
+        if (/savechanges/i.test(settings.operation)) {
             settings.type = 'POST';
             settings.dataType = 'json';
             settings.contentType = 'application/json';
-            settings.data = options.data || settings.data || {};
+            settings.data = settings.data || {};
         } else {
             settings.type = settings.type || 'GET';
             settings.dataType = settings.dataType || 'json';
         }
-
+        delete settings.operation; // not an xhr setting
         return settings;
     }
    /**

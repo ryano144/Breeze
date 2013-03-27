@@ -636,12 +636,13 @@ var EntityManager = (function () {
     @param query {EntityQuery|String}  The {{#crossLink "EntityQuery"}}{{/crossLink}} or OData query string to execute.
     @param [callback] {Function} Function called on success.
         
-        successFunction([data])
+        successFunction(data)
         @param callback.data {Object} 
         @param callback.data.results {Array of Entity}
         @param callback.data.query {EntityQuery} The original query
         @param callback.data.entityManager {EntityManager} The manager used to make the query
-        @param callback.data.inlineCount {Integer} Only available if 'inlineCount(true)' was applied to the query.  Returns the count of 
+        @param callback.data.fromCache {Boolean} Whether the query was applied to the cache (true) or the server (false)
+        @param [callback.data.inlineCount] {Integer} Only available if 'inlineCount(true)' was applied to the query.  Returns the count of 
         items that would have been returned by the query before applying any skip or take operators, but after any filter/where predicates
         would have been applied.
         @param callback.data.adapterExports {Object} Whatever the http adapter decides to return such as
@@ -649,10 +650,10 @@ var EntityManager = (function () {
 
     @param [errorCallback] {Function} Function called on failure.
             
-        failureFunction([error])
-        @param [errorCallback.error] {Error} Any error that occured wrapped into an Error object.
-        @param [errorCallback.error.query] {EntityQuery} The query that caused the error.
-        @param [errorCallback.error.entityManager] {EntityManager} The manager used to make the query.
+        failureFunction(error)
+        @param errorCallback.error {Error} Any error that occured wrapped into an Error object.
+        @param errorCallback.error.query {EntityQuery} The query that caused the error.
+        @param errorCallback.error.entityManager {EntityManager} The manager used to make the query.
         @param [errorCallback.error.adapterExports] {Object} Whatever the http adapter decides to return such as
         the XMLHttpRequest object used to make the call. The presence of adapterExports indicates that a server request was attempted.
             
@@ -661,11 +662,12 @@ var EntityManager = (function () {
 
         promiseData.results {Array of Entity}
         promiseData.query {EntityQuery} The original query
-        promiseData.data.entityManager {EntityManager} The manager  used to make the query
-        promiseData.inlineCount {Integer} Only available if 'inlineCount(true)' was applied to the query.  Returns the count of 
+        promiseData.entityManager {EntityManager} The manager  used to make the query
+        [promiseData.fromCache] {Boolean} Whether the query was applied to the cache (true) or the server (false)
+        [promiseData.inlineCount] {Integer} Only available if 'inlineCount(true)' was applied to the query.  Returns the count of 
         items that would have been returned by the query before applying any skip or take operators, but after any filter/where predicates
         would have been applied. 
-        promiseData.adapterExports {Object} Whatever the http adapter decides to return such as
+        [promiseData.adapterExports] {Object} Whatever the http adapter decides to return such as
         the XMLHttpRequest object used to make the call. The presence of adapterExports indicates that a server request was made.
     **/
     proto.executeQuery = function (query, callback, errorCallback) {
@@ -706,7 +708,8 @@ var EntityManager = (function () {
                     return {
                         results: results,
                         query: query,
-                        entityManager: em
+                        entityManager: em,
+                        fromCache: true
                     };
                 });
             }
@@ -766,6 +769,7 @@ var EntityManager = (function () {
                     results: results,
                     query: query,
                     entityManager: em,
+                    fromCache: false,
                     inlineCount: data.inlineCount,
                     adapterExports: data.adapterExports
                 };
@@ -954,21 +958,25 @@ var EntityManager = (function () {
     {{#crossLink "EntityManager/saveOptions"}}{{/crossLink}} if null.
     @param [callback] {Function} Function called on success.
         
-        successFunction([saveResult])
-        @param [callback.saveResult] {Object} 
-        @param [callback.saveResult.entities] {Array of Entity} The saved entities - with any temporary keys converted into 'real' keys.  
-        These entities are actually references to entities in the EntityManager cache that have been updated as a result of the
-        save.
-        @param [callback.saveResult.keyMappings] {Object} Map of OriginalEntityKey, NewEntityKey
-        @param [callback.saveResult.entityManager] {EntityManager} Manager used to save
+        successFunction(saveResult)
+        @param callback.saveResult {Object} 
+        @param callback.saveResult.entities {Array of Entity} The saved entities returned from the server
+        - with any temporary keys converted into 'real' keys.  
+        These entities are actually references to entities in the EntityManager cache that have been updated
+        as a result of the save.
+        @param callback.saveResult.keyMappings {Object} Map of OriginalEntityKey, NewEntityKey
+        @param callback.saveResult.entityManager {EntityManager} Manager used to save
+        @param [callback.saveResult.saveResourceName] Name of server-side save resource if saved to server
         @param [callback.saveResult.adapterExports] {Object} Whatever the http adapter decides to return such as
         the XMLHttpRequest object used to make the call. The presence of adapterExports indicates that a server request was made.
 
     @param [errorCallback] {Function} Function called on failure.
             
-        failureFunction([error])
-        @param [errorCallback.error] {Error} Any error that occured wrapped into an Error object.
-        @param [errorCallback.error.entityManager] {EntityManager} Manager used to save
+        failureFunction(error)
+        @param errorCallback.error {Error} Any error that occured wrapped into an Error object.
+        @param errorCallback.error.entityManager {EntityManager} Manager used to save
+        @param [errorCallback.error.saveResourceName] Name of server-side save resource if save attempted
+        @param [errorCallback.error.entitiesWithErrors] {Array of Entity} Entities that failed validation on client or server
         @param [errorCallback.error.adapterExports] {Object} Whatever the http adapter decides to return such as
         the XMLHttpRequest object used to make the call. The presence of adapterExports indicates that a server request was attempted.
     @return {Promise} Promise
@@ -983,16 +991,12 @@ var EntityManager = (function () {
         assertParam(callback, "callback").isFunction().isOptional().check();
         assertParam(errorCallback, "errorCallback").isFunction().isOptional().check();
 
-        saveOptions = __extend({}, saveOptions || this.saveOptions || SaveOptions.defaultInstance);
-
-        var saveResourceName = saveOptions.saveResourceName || 'SaveChanges';
-
-        var promise = saveChangesImpl(this, saveResourceName, entities, saveOptions)
+        var promise = saveChangesImpl(this, entities, saveOptions)
 
         return promiseWithCallbacks(promise, callback, errorCallback);
     }
 
-    function saveChangesImpl(em, saveResourceName, entities, saveOptions) {
+    function saveChangesImpl(em, entities, saveOptions) {
         var isFullSave = entities == null;
         var entitiesToSave = getEntitiesToSave(em, entities);
             
@@ -1000,6 +1004,8 @@ var EntityManager = (function () {
             var saveResult =  { entities: [], keyMappings: [], entityManager: em };
             return Q.resolve(saveResult);
         }
+
+        saveOptions = __extend({}, saveOptions || this.saveOptions || SaveOptions.defaultInstance);
             
         if (!saveOptions.allowConcurrentSaves) {
             var anyPendingSaves = entitiesToSave.some(function (entity) {
@@ -1031,13 +1037,11 @@ var EntityManager = (function () {
         // TODO: need to check that if we are doing a partial save that all entities whose temp keys 
         // are referenced are also in the partial save group
 
+        var saveResourceName = saveOptions.saveResourceName || 'SaveChanges';
         var saveBundle = { entities: unwrapEntities(entitiesToSave, em.metadataStore), saveOptions: saveOptions};
         var saveBundleStringified = JSON.stringify(saveBundle);
 
-        var promise = performSave(em, saveResourceName, saveBundleStringified, entitiesToSave);
-
-        return promise;
-
+        return performSave(em, saveResourceName, saveBundleStringified, entitiesToSave);
     };
 
     function performSave(em, saveResourceName, saveBundleStringified, entitiesToSave) {
@@ -1050,10 +1054,10 @@ var EntityManager = (function () {
             // HACK: simply to change the 'case' of properties in the saveResult
             // but KeyMapping properties are still ucase. ugh...
             var saveResult = {
-                saveResourceName: saveResourceName,
                 entities: data.Entities,
                 keyMappings: data.KeyMappings,
                 entityManager: em,
+                saveResourceName: saveResourceName,
                 adapterExports: data.adapterExports
             };
             fixupKeys(em, saveResult.keyMappings);
@@ -1084,6 +1088,7 @@ var EntityManager = (function () {
         
         function saveFailed(error) {
             markIsBeingSaved(entitiesToSave, false);
+            error.saveResourceName = saveResourceName,
             error.entityManager = em;
             return Q.reject(error);
         }

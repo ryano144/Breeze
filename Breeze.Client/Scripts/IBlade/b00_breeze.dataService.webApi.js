@@ -66,7 +66,7 @@
         var url = getMetadataUrl(serviceName);      
         var msgPrefix = "Metadata query failed for: " + url;
 
-        http.send({ url: url, operation: 'metadata'}).then(succeeded, failed);
+        return http.send({ url: url, operation: 'metadata'}).then(succeeded, failed);
         
         function succeeded(adapterResponse) {
             
@@ -120,7 +120,7 @@
         var url = entityManager.serviceName + odataQuery;
         var msgPrefix = "Query failed";
 
-        http.send({ url: url, operation: 'query'}).then(succeeded, failed);
+        return http.send({ url: url, operation: 'query'}).then(succeeded, failed);
 
         function succeeded(adapterResponse) {
             try {
@@ -147,7 +147,7 @@
         var url = entityManager.serviceName + (saveResourceName || "SaveChanges");
         var msgPrefix = "Save failed";
 
-        http.send({ url: url, operation: 'savechanges' }).then(succeeded, failed);
+        return http.send({ url: url, operation: 'savechanges' }).then(succeeded, failed);
 
         function succeeded(adapterResponse) {
             var data = adapterResponse.data;

@@ -550,23 +550,26 @@ var EntityQuery = (function () {
     @method execute
     @async
         
-    @param callback {Function} Function called on success.
+    @param [callback] {Function} Function called on success.
         
-        successFunction([data])
-        @param [callback.data] {Object} 
+        successFunction(data)
+        @param callback.data {Object} 
         @param callback.data.results {Array of Entity}
         @param callback.data.query {EntityQuery} The original query
-        @param callback.data.XHR {XMLHttpRequest} The raw XMLHttpRequest returned from the server.
-        @param callback.data.inlineCount {Integer} Only available if 'inlineCount(true)' was applied to the query.  Returns the count of 
-        items that would have been returned by the query before applying any skip or take operators, but after any filter/where predicates
-        would have been applied. 
+        @param callback.data.entityManager {EntityManager} The manager used to make the query
+        @param callback.data.fromCache {Boolean} Whether the query was applied to the cache (true) or the server (false)
+        @param callback.data.adapterExports {Object} Whatever the http adapter decides to return such as
+        the XMLHttpRequest object used to make the call. The presence of adapterExports indicates that a server request was made.
 
-    @param errorCallback {Function} Function called on failure.
+
+    @param [errorCallback] {Function} Function called on failure.
             
-        failureFunction([error])
-        @param [errorCallback.error] {Error} Any error that occured wrapped into an Error object.
-        @param [errorCallback.error.query] The query that caused the error.
-        @param [errorCallback.error.XHR] {XMLHttpRequest} The raw XMLHttpRequest returned from the server.
+        failureFunction(error)
+        @param errorCallback.error {Error} Any error that occured wrapped into an Error object.
+        @param errorCallback.error.query {EntityQuery} The query that caused the error.
+        @param errorCallback.error.entityManager {EntityManager} The manager used to make the query.
+        @param [errorCallback.error.adapterExports] {Object} Whatever the http adapter decides to return such as
+        the XMLHttpRequest object used to make the call. The presence of adapterExports indicates that a server request was attempted.
 
     @return {Promise}
     **/
