@@ -583,12 +583,12 @@ var EntityManager = (function () {
 
         // TODO: WARNING: DO NOT LEAVE THIS CODE IN PRODUCTION.
         // TEST::: see if serialization actually works completely
-//            var that = this;
-//            promise = promise.then(function () {
-//                var stringified = that.metadataStore.exportMetadata();
-//                that.metadataStore = new MetadataStore();
-//                that.metadataStore.importMetadata(stringified);
-//            });
+        //            var that = this;
+        //            promise = promise.then(function () {
+        //                var stringified = that.metadataStore.exportMetadata();
+        //                that.metadataStore = new MetadataStore();
+        //                that.metadataStore.importMetadata(stringified);
+        //            });
 
         return promiseWithCallbacks(promise, callback, errorCallback);
     };
@@ -723,50 +723,19 @@ var EntityManager = (function () {
                 dataService: dataService,
                 mergeStrategy: queryOptions.mergeStrategy,
                 jsonResultsAdapter: jsonResultsAdapter,
-                refMap: {},
-                deferredFns: []
+                validateOnQuery: em.validationOptions.validateOnQuery             
             };
-            var validateOnQuery = em.validationOptions.validateOnQuery;
 
             return dataService.adapterInstance.executeQuery(em, odataQuery)
                     .then(querySuccess).fail(queryFailed);
         } catch (e) {
             return queryFailed(e);
-        }
+        } 
 
         function querySuccess(data) {
-            var promise = __wrapExecution(
-            function () {          // initialize
-                var state = { isLoading: em.isLoading };
-                em.isLoading = true;
-                em._pendingPubs = [];
-                return state;
-            }, function (state) {  // finally
-                // cleanup
-                em.isLoading = state.isLoading;
-                em._pendingPubs.forEach(function (fn) { fn(); });
-                em._pendingPubs = null;
-                // HACK for GC
-                query = null;
-                queryContext = null;
-                // HACK: some errors thrown in core function do not propagate properly.
-                // Catch and return as a failed promise.
-                if (state.error) {
-                    return queryFailed(state.error);
-                };
-
-            }, function () {      // core
-                var nodes = jsonResultsAdapter.extractResults(data);
-                if (!Array.isArray(nodes)) {
-                    nodes = [nodes];
-                }
-                var results = nodes.map(mapNode);
-
-                if (queryContext.deferredFns.length > 0) { // Why? forEach tests this anyway
-                    queryContext.deferredFns.forEach(function (fn) { fn(); });
-                }
+            try {
                 var result = {
-                    results: results,
+                    results: _importRawEntityDataImpl(data, queryContext),
                     query: query,
                     entityManager: em,
                     fromCache: false,
@@ -774,17 +743,13 @@ var EntityManager = (function () {
                     adapterExports: data.adapterExports
                 };
                 return Q.resolve(result);
-
-                function mapNode(node) {
-                    var r = visitAndMerge(node, queryContext, { nodeType: "root" });
-                    // anon types and simple types will not have an entityAspect.
-                    if (validateOnQuery && r.entityAspect) {
-                        r.entityAspect.validateEntity();
-                    }
-                    return r;
-                }
-            });
-            return promise; // either good or bad
+            } catch (e) {
+                return queryFailed(e);
+            } finally {
+                // HACK: for GC
+                query = null; 
+                queryContext = null;
+            }
         }
 
         function queryFailed(e) {
@@ -792,9 +757,12 @@ var EntityManager = (function () {
                 e.query = query;
                 e.entityManager = em;
             }
+            // HACK: for GC
+            query = null; 
+            queryContext = null;
             return Q.reject(e);
         }
-
+ 
         //#region Original code, deprecate, remove
         function oldExecuteQuerySuccess(data) {
             var result = __wrapExecution(function () {
@@ -844,6 +812,125 @@ var EntityManager = (function () {
         }
         //#endregion
 
+    }
+   
+    /**
+   Import raw JSON data from a 'query' result such as an HTTP request
+   in the same way that an EntityManager query merges its raw data results.
+
+    @method importRawEntityData
+    @async
+    @param rootEntityTypeName {String}  The name of the top level {{#crossLink "EntityType"}}{{/crossLink}} or a resource name for that type.
+    @param data {Object} The data object to be passed to the {{#crossLink "JsonResultsAdapter"}}{{/crossLink}}.extractResults method. 
+    Typically the object returned from an HTTP adapter.
+        @param [data.results] {Array of Object} By convention, the raw data from the query
+
+    @param [queryContext] {Object} Context for interpreting and merging data into the manager. 
+    Add values as needed for a custom {{#crossLink "JsonResultsAdapter"}}{{/crossLink}} or to control merge behavior explicitly.
+    Implicit values will be determined by breeze default option resolution.
+        @param [queryContext.dataService] {String} Name of the remote data service.
+        @param [queryContext.jsonResultsAdapter {JsonResultsAdapter} for parsing JSON results returned by a web service.
+        @param [queryContext.mergeStrategy] {MergeStrategy}  
+        @param [queryContext.validateOnQuery] {Boolean} Whether to validate entities after merging them.           
+
+    @return {Promise} Promise
+        [results] {Array of Entity}
+        [error] {Error} 
+    **/
+    proto.importRawEntityData = function (rootEntityTypeName, data, queryContext) {
+        try {
+            var em = this;
+            throwIfNoRootEntityTypeName();
+            configureQueryContext();
+            throwIfNoMetadata();
+            var results = _importRawEntityDataImpl(data, queryContext);
+            return Q.resolve(results);
+        } catch(err) {
+            return Q.reject(e);
+        } finally {
+            queryContext = null; // HACK: for GC
+        }
+
+        function configureQueryContext() {
+            queryContext = queryContext || {};
+            queryContext.entityManager = em;
+            queryContext.dataService = queryContext.dataService || em.dataService;
+            queryContext.query = queryContext.query || EntityQuery.from(rootEntityTypeName);
+            var jsonResultsAdapter = queryContext.jsonResultsAdapter || queryContext.dataService.jsonResultsAdapter;
+
+            var mergeStrategy = queryContext.mergeStrategy ||
+                (em.queryOptions || QueryOptions.defaultInstance).mergeStrategy;
+
+            var validateOnQuery = queryContext.validateOnQuery || em.validationOptions.validateOnQuery;
+        }
+
+        function throwIfNoRootEntityTypeName() {
+            // _importRawEntityDataImpl requires a query object to determine
+            // the root (top) level entity type
+            // Make one from the rootEntityTypeName
+            if (!rootEntityTypeName) {
+                throw new Error("cannot execute importRawEntityData without a rootEntityTypeName.")
+            }
+        
+        function throwIfNoMetadata() {
+            var metadataStore = em.metadataStore;
+            if (metadataStore.isEmpty() && queryContext.dataService.hasServerMetadata) {
+                throw new Error("cannot execute importRawEntityData until metadataStore is populated.");
+            }
+        }
+    }
+
+    function _importRawEntityDataImpl(data, queryContext) {
+        var em = queryContext.entityManager;
+        return __wrapExecution(start, end, body);
+        
+        function start() {
+            var state = { isLoading: em.isLoading };
+            em.isLoading = true;
+            em._pendingPubs = [];
+            return state;
+        }
+
+        function end(state) {
+            // cleanup
+            em.isLoading = state.isLoading;
+            em._pendingPubs.forEach(function (fn) { fn(); });
+            em._pendingPubs = null;
+            // HACK: some errors thrown in core function do not propagate properly; re-throw
+            if (state.error) {
+                throw state.error;
+            };
+        }
+
+        function body() {
+            var validateOnQuery = queryContext.validateOnQuery;
+            // Members of queryContext required by jsonResultsAdapter processing
+            queryContext.refMap = queryContext.refMap || {};
+            queryContext.deferredFns = queryContext.deferredFns || [];
+
+
+            // the default adapter's 'extractResults' presupposes 
+            // that "data.results" contain the raw data objects
+            var nodes = queryContext.jsonResultsAdapter.extractResults(data);
+            if (!Array.isArray(nodes)) {
+                nodes = [nodes];
+            }
+            var results = nodes.map(mapNode);
+
+            if (queryContext.deferredFns.length > 0) { // Is 'deferredFns' a non-empty, array-like thing
+                queryContext.deferredFns.forEach(function (fn) { fn(); });
+            }
+            return results;
+
+            function mapNode(node) {
+                var r = visitAndMerge(node, queryContext, { nodeType: "root" });
+                // anon types and simple types will not have an entityAspect.
+                if (validateOnQuery && r.entityAspect) {
+                    r.entityAspect.validateEntity();
+                }
+                return r;
+            }
+        }
     }
 
     /**
@@ -1063,7 +1150,7 @@ var EntityManager = (function () {
             fixupKeys(em, saveResult.keyMappings);
 
             var saveContext = {
-                query: null, // tells visitAndMerge that this is a save instead of a query
+                query: null, // HACK: tells visitAndMerge that this is a save instead of a query
                 entityManager: em,
                 jsonResultsAdapter: em.dataService.jsonResultsAdapter,
                 mergeStrategy: MergeStrategy.OverwriteChanges,
@@ -1109,7 +1196,7 @@ var EntityManager = (function () {
             fixupKeys(that, saveResult.keyMappings);
                 
             var queryContext = {
-                query: null, // tells visitAndMerge that this is a save instead of a query
+                query: null, // HACK: tells visitAndMerge that this is a save instead of a query
                 entityManager: that,
                 jsonResultsAdapter: that.dataService.jsonResultsAdapter,
                 mergeStrategy: MergeStrategy.OverwriteChanges,
