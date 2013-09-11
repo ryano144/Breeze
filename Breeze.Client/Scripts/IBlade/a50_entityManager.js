@@ -1739,7 +1739,7 @@ var EntityManager = (function () {
                 if (newTempKey !== undefined) {
                     // fixup pk
                     targetEntity.setProperty(entityType.keyProperties[0].name, newTempKey.values[0]);
-
+                    targetEntity.entityAspect.hasTempKey = true;
                     // fixup foreign keys
                     if (newAspect.tempNavPropNames) {
                         newAspect.tempNavPropNames.forEach(function (npName) {
